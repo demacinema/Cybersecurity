@@ -81,6 +81,7 @@ def main():
     print(f"Recursive: {args.r}")
     print(f"Level: {args.l}")
     print(f"Path: {args.p}")
+    print()
 
     # Testa baixar a página
     html = fetch_page(args.url)
