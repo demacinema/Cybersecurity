@@ -5,7 +5,7 @@
 
 import sys  # Used for exiting the program with a status code
 import argparse  # Used for parsing command-line arguments
-from pathlib import Path
+from pathlib import Path  # Used for handling filesystem paths in an object-oriented way
 
 
 def parse_arguments():
@@ -54,20 +54,40 @@ def validate_input_files(file_paths):
                   file=sys.stderr)
             continue
 
+        # Validate extension
+        if not validate_file_extension(file_path):
+            continue
+
         # Valid file
         valid_files.append(file_path)
 
     return valid_files
 
 
+def validate_file_extension(file_path):
+    """Check if file has the supported extension."""
+
+    supported_extensions = {'.jpg', '.jpeg', '.png', '.gif', '.bmp'}
+
+    file_extension = file_path.suffix.lower()
+
+    if file_extension not in supported_extensions:
+        print(f"Error: Unsupported file format: {file_path.name} ({file_extension})",
+            file=sys.stderr)
+        return False
+
+    return True
+
+
 def main():
     args = parse_arguments()
 
-    # STEP 1: Parse arguments
+    # Parse arguments
     print(f"Files: {args.files}")
     print(f"Total: {len(args.files)}")
 
-    # STEP 2: Validate files
+    # Validate files
+    # Validate extensions
     valid_files = validate_input_files(args.files)
     print(f"Valid files: {len(valid_files)}")
 
