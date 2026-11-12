@@ -1,0 +1,444 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+
+"""Spider - Download images from websites recursively"""
+
+import sys  # Para manipular saída e encerrar o programa em caso de erro
+import argparse  # Para processar argumentos da linha de comando
+import time  # Para fazer pausas entre requisições HTTP
+from html.parser import HTMLParser  # Para processar HTML
+from urllib.request import urlopen, Request  # Adicione Request
+from urllib.error import URLError  # Para tratar erros de requisição HTTP
+from urllib.parse import (
+    urlparse, urljoin,
+    urlsplit, urlunsplit,
+    quote, unquote,
+  )  # Para manipular URLs
+from pathlib import Path  # Para manipular caminhos de arquivos
+from collections import deque
+
+VALID_IMG_EXTENSIONS = {'.jpg', '.jpeg', '.png', '.gif', '.bmp'}
+
+
+def non_negative_int(value):
+    try:
+        n = int(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError("must be an integer") from exc
+    if n < 0:
+        raise argparse.ArgumentTypeError("must be >= 0")
+    return n
+
+
+def parse_arguments():
+    """Processa os argumentos da linha de comando"""
+
+    parser = argparse.ArgumentParser()
+
+    parser.add_argument('url')
+    parser.add_argument('-r', action='store_true', dest='rec')
+    parser.add_argument(
+        '-l',
+        nargs='?',         # allows: -l OR -l 3
+        const=5,           # if only -l, use 5
+        default=None,      # if no -l, keep None
+        type=non_negative_int,
+        dest='level'
+    )
+    parser.add_argument('-p', default='./data/', dest='path')
+
+    args = parser.parse_args()
+
+    if args.level is not None and not args.rec:
+        parser.error("-l only possible with -r")
+
+    # # Pega tudo que não foi processado
+    # args, unknown = parser.parse_known_args()
+
+    # # Processa -l manualmente
+    # args.level = None  # padrão: sem limite
+
+    # # Valida argumentos desconhecidos (exceto -l)
+    # invalid_args = [
+    #     arg for arg in unknown
+    #     if arg != '-l' and not arg.lstrip('-').isdigit()]
+    # if invalid_args:
+    #     print(f"Error: unrecognized arguments: {' '.join(invalid_args)}")
+    #     sys.exit(1)
+
+    # # processa -l manualmente
+    # if '-l' in sys.argv:
+    #     # Se não tem -r, erro
+    #     if not args.rec:
+    #         print("Error: -l only possible if has -r")
+    #         sys.exit(1)
+
+    #     # Se tem -l, processa o valor
+    #     idx = sys.argv.index('-l')
+    #     if idx + 1 < len(sys.argv) and sys.argv[idx + 1][0] != '-':
+    #         try:
+    #             args.level = int(sys.argv[idx + 1])
+    #         except ValueError:
+    #             args.level = 5
+    #     else:
+    #         args.level = 5
+
+    return args
+
+
+def fetch_page(url):
+    try:
+        # time.sleep(1)
+        safe_url = sanitize_url(url)
+
+        req = Request(
+            safe_url,
+            headers={
+                "User-Agent": "Mozilla/5.0",
+                "Accept":
+                "text/html,application/xhtml+xml, \
+                application/xml;q=0.9,*/*;q=0.8",
+                "Accept-Language": "en-US,en;q=0.9",
+            },
+        )
+
+        # response = urlopen(req, timeout=5)  # use req, not url
+        # content = response.read()
+
+        with urlopen(req, timeout=5) as response:
+            content_type = (response.headers.get("Content-Type") or "").lower()
+
+            # Skip non-HTML resources (pdf, images, binaries, etc.)
+            if content_type and (
+                "text/html" not in content_type
+                and "application/xhtml+xml" not in content_type
+            ):
+                return None
+
+            content = response.read()
+
+        for enc in ("utf-8", "iso-8859-1", "windows-1252", "latin-1"):
+            try:
+                return content.decode(enc)
+            except UnicodeDecodeError:
+                pass
+
+        return content.decode("utf-8", errors="ignore")
+
+    except URLError as e:
+        print(f"Erro ao baixar {url}: {e}")
+        return None
+    except Exception as e:
+        print(f"Erro: {e}")
+        return None
+
+
+class ImageParser(HTMLParser):
+    """Parser para extrair URLs de imagens de HTML"""
+
+    def __init__(self):
+        """Inicializa o parser e a lista de imagens"""
+        super().__init__()
+        self.images = []
+
+    def handle_starttag(self, tag, attrs):
+        """Chamado quando encontra uma tag de abertura"""
+        # print(f"[DEBUG] start tag: {tag} | attrs: {attrs}")  # debug
+        if tag == 'img':
+            # attrs é uma lista de tuplas:
+            # [('src', 'url'), ('alt', 'texto'), ...]
+            for attr, value in attrs:
+                if attr == 'src' and value:
+                    # print(f"-->[DEBUG] img src encontrado: {value}")  # debug
+                    self.images.append(value)
+
+
+def extract_images(html):
+    """Extrai URLs de imagens de um HTML
+    Args: html (str): Conteúdo HTML da página
+    Returns: list: Lista de URLs de imagens encontradas"""
+
+    parser = ImageParser()
+    try:
+        parser.feed(html)
+        parser.close()
+    except Exception:
+        return []
+
+    # print(f"****[DEBUG] LISTA FINAL: {parser.images}")  # debug
+    return parser.images
+
+
+def is_valid_image_url(image_url):
+    """Return True if valid image extension."""
+
+    if not image_url:
+        return False
+    if image_url.startswith('data:'):
+        return False  # ignore base64 inline images for now
+
+    path = urlparse(image_url).path.lower()
+    return any(path.endswith(ext) for ext in VALID_IMG_EXTENSIONS)
+    # return True if any extension matches ->
+
+    # for ext in VALID_IMG_EXTENSIONS:
+    # if path.endswith(ext):
+    #     return True
+    # return False
+
+
+def filter_valid_image_urls(image_urls):
+    """Keep only image URLs with validd extensions."""
+    return [url for url in image_urls if is_valid_image_url(url)]
+    # [ EXPRESSION for ITEM in ITERABLE if CONDITION ]
+    # if is True, is included on the returned list ->
+
+    # valid_urls = []
+    # for url in image_urls:
+    #     if is_valid_image_url(url):
+    #         valid_urls.append(url)
+    # return valid_urls
+
+
+def convert_to_absolute_urls(base_url, image_urls):
+    """Convert relative image URLs to absolute URLs."""
+
+    absolute_urls = []
+    for image_url in image_urls:
+        if not image_url:
+            continue
+        absolute_urls.append(urljoin(base_url, image_url.strip()))
+    return absolute_urls
+
+
+def sanitize_url(url):
+    """Percent-encode invalid characters (spaces, unicode) in URL."""
+    url = (url or "").strip()
+    parts = urlsplit(url)
+
+    safe_path = quote(parts.path, safe="/%:@+~!$&'()*;,=-._")
+    safe_query = quote(parts.query, safe="=&%:@+~!$'()*;,/-._")
+
+    return urlunsplit(
+        (parts.scheme, parts.netloc,
+            safe_path, safe_query, parts.fragment)
+    )
+
+
+def download_image(image_url, output_dir):
+    """Download one image and save. Return saved path or None."""
+
+    try:
+        safe_url = sanitize_url(image_url)
+
+        req = Request(
+            safe_url,
+            headers={
+                "User-Agent": "Mozilla/5.0",
+                "Accept": "image/*,*/*;q=0.8",
+            },
+        )
+
+        with urlopen(req, timeout=10) as response:
+            content = response.read()
+
+        filename = Path(unquote(urlparse(safe_url).path)).name
+        if not filename:
+            filename = f"image_{int(time.time() * 1000)}.bin"
+
+        output_path = Path(output_dir) / filename
+
+        with open(output_path, 'wb') as f:
+            f.write(content)
+
+        print(f"Downloaded: {image_url} -> {output_path}")
+        return str(output_path)
+
+    except URLError as e:
+        print(f"Error downloading {image_url}: {e}")
+        return None
+    except Exception as e:
+        print(f"Error saving {image_url}: {e}")
+        return None
+
+
+def ensure_output_dir(output_dir):
+    """Create output directory if it does not exist."""
+    try:
+        Path(output_dir).mkdir(parents=True, exist_ok=True)
+        return True
+    except Exception as e:
+        print(f"Error creating directory '{output_dir}': {e}")
+        return False
+
+
+def process_single_page(page_url, output_dir):
+    """Download images from a single page (non -r)."""
+    html = fetch_page(page_url)
+    if not html:
+        print("Falha ao baixar página")
+        return 0
+
+    images = extract_images(html)
+    valid_images = filter_valid_image_urls(images)
+    absolute_images = convert_to_absolute_urls(page_url, valid_images)
+
+    print(f"Encontradas {len(images)} imagem(s)")
+    print(f"Válidas: {len(valid_images)}")
+    print(f"Absolutas: {len(absolute_images)}\n")
+
+    downloaded = 0
+    # evita download duplicado da mesma URL na mesma página
+    for img in dict.fromkeys(absolute_images):
+        if download_image(img, output_dir):
+            downloaded += 1
+
+    return downloaded
+
+
+class LinkParser(HTMLParser):
+    """Parser para extrair links (<a href=...>) de HTML."""
+
+    def __init__(self):
+        super().__init__()
+        self.links = []
+
+    def handle_starttag(self, tag, attrs):
+        if tag == 'a':
+            for attr, value in attrs:
+                if attr == 'href' and value:
+                    self.links.append(value)
+
+
+def extract_links(html):
+    """Extrai URLs de links de um HTML."""
+    parser = LinkParser()
+    try:
+        parser.feed(html)
+        parser.close()
+    except Exception:
+        return []
+    return parser.links
+
+
+def normalize_url(url):
+    """Remove fragmento para evitar duplicatas."""
+    p = urlparse(url)
+    return p._replace(fragment='').geturl()
+
+
+def is_same_domain(url, root_netloc):
+    """Permite apenas http(s), e links do mesmo dominio."""
+    p = urlparse(url)
+    return p.scheme in ('http', 'https') and p.netloc == root_netloc
+
+
+def process_recursive(start_url, output_dir, max_depth):
+    """Crawl recursivo com limite de profundidade."""
+    root_netloc = urlparse(start_url).netloc
+    queue = deque([(normalize_url(start_url), 0)])
+    visited_pages = set()
+    downloaded_images = set()
+    downloaded_count = 0
+
+    while queue:
+        page_url, depth = queue.popleft()
+        if page_url in visited_pages:
+            continue
+        visited_pages.add(page_url)
+
+        print(f"[Depth {depth}] {page_url}")
+        html = fetch_page(page_url)
+        if not html:
+            continue
+
+        # Baixa imgs da pagina atual
+        images = extract_images(html)
+        valid_images = filter_valid_image_urls(images)
+        absolute_images = convert_to_absolute_urls(page_url, valid_images)
+
+        for img_url in dict.fromkeys(absolute_images):
+            img_url = normalize_url(img_url)
+            if img_url in downloaded_images:
+                continue
+            if download_image(img_url, output_dir):
+                downloaded_images.add(img_url)
+                downloaded_count += 1
+
+        # Se atingiu limite, não expande links desta página
+        if depth >= max_depth:
+            continue
+
+        # Descobre próximas páginas
+        links = extract_links(html)
+        absolute_links = convert_to_absolute_urls(page_url, links)
+
+        for link in absolute_links:
+            link = normalize_url(link.strip())
+            if is_same_domain(link, root_netloc) and link not in visited_pages:
+                queue.append((link, depth + 1))
+
+    return downloaded_count
+
+
+def main():
+    """Função principal"""
+    args = parse_arguments()
+
+    # Testa args
+    print(f"URL: {args.url}")
+    print(f"Recursive: {args.rec}")
+    print(f"Level: {args.level}")
+    print(f"Path: {args.path}")
+    print()
+
+    # Garante que o path exista (se não tiver, cria):
+    if not ensure_output_dir(args.path):
+        sys.exit(1)
+
+    # Se não for recursivo, processa apenas a página única
+    if not args.rec:
+        downloaded = process_single_page(args.url, args.path)
+        print(f"\nBaixadas: {downloaded}")
+        return
+
+    # default da recursão sem -l = 5
+    max_depth = args.level if args.level is not None else 5
+    downloaded = process_recursive(args.url, args.path, max_depth)
+    print(f"Baixadas: {downloaded}\n")
+
+
+if __name__ == '__main__':
+    main()
+
+    # # Testa baixar a página
+    # html = fetch_page(args.url)
+
+    # if not html:
+    #     print("✗ Falha ao baixar página")
+    #     sys.exit(1)  # Encerra antes de chamar extract_images()
+
+    # # print("[DEBUG] Página baixada! Primeiros 200 caracteres:\n")
+    # # print(html[:200]). # debug
+
+    # # Testa extrair imagens
+    # images = extract_images(html)
+    # valid_images = filter_valid_image_urls(images)
+    # absolute_images = convert_to_absolute_urls(args.url, valid_images)
+
+    # print(f"Encontradas {len(images)} imagem(s)\n")
+    # print(f"Validas: {len(valid_images)}\n")
+    # print(f"Absolutas: {len(absolute_images)}\n")
+
+    # # for img in images:
+    # # for img in valid_images:
+    # for img in absolute_images:
+    #     print(f"  - {img}\n")
+
+    # downloaded = 0
+    # for img in absolute_images:
+    #     # print(".", end="", flush=True)  # heartbeat: shows progress
+    #     if download_image(img, args.path):
+    #         downloaded += 1
+
+    # print(f"Baixadas: {downloaded}\n")
