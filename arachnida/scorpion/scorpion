@@ -6,7 +6,7 @@
 import sys  # Used for exiting the program with a status code
 import argparse  # Used for parsing command-line arguments
 from pathlib import Path  # Used for handling filesystem paths
-from PIL import Image  # Used for opening and inspecting image files
+from PIL import Image, ExifTags  # Used for opening and inspecting image files
 
 
 def parse_arguments():
@@ -99,6 +99,29 @@ def open_image_safely(file_path):
         print(f"Error: Corrupted or invalid image {file_path.name}: {e}",
               file=sys.stderr)
         return None
+
+
+def extract_exif(image, file_path):
+    """Extract EXIF metadata, return dict"""
+
+    exif_data = {}
+
+    try:
+        exif = image.getexif()
+
+        if not exif:
+            return exif_data
+
+        # Convert EXIF tag IDs to readable names
+        for tag_id, value in exif.items():
+            tag_name = ExifTags.TAGS.get(tag_id, tag_id)
+            exif_data[tag_name] = value
+
+    except Exception as e:
+        print(f"Warning: Not able to read EXIF from {file_path.name}: {e}",
+              file=sys.stderr)
+
+    return exif_data
 
 
 def main():
