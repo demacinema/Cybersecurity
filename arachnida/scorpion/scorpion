@@ -7,6 +7,7 @@ import sys  # Used for exiting the program with a status code
 import argparse  # Used for parsing command-line arguments
 from pathlib import Path  # Used for handling filesystem paths
 from PIL import Image, ExifTags  # Used for opening and inspecting image files
+from datetime import datetime  # Used for dates
 
 
 def parse_arguments():
@@ -115,13 +116,62 @@ def extract_exif(image, file_path):
         # Convert EXIF tag IDs to readable names
         for tag_id, value in exif.items():
             tag_name = ExifTags.TAGS.get(tag_id, tag_id)
-            exif_data[tag_name] = value
+
+            # Handle GPS Info sub-IFD (nested tags)
+            if tag_id == 34853:  # GPSInfo tag ID
+                try:
+                    gps_ifd = exif.get_ifd(0x8825)  # Get the nested GPS data
+                    gps_data = {}
+                    for gps_tag_id, gps_value in gps_ifd.items():
+                        gps_tag_name = ExifTags.GPSTAGS.get(gps_tag_id,
+                                                            gps_tag_id)
+                        gps_data[gps_tag_name] = gps_value
+                    exif_data[tag_name] = gps_data
+                except Exception:
+                    exif_data[tag_name] = value
+            else:
+                exif_data[tag_name] = value
 
     except Exception as e:
         print(f"Warning: Not able to read EXIF from {file_path.name}: {e}",
               file=sys.stderr)
 
     return exif_data
+
+
+def extract_basic_metadata(image, file_path):
+    """Extract basic metadata"""
+
+    metadata = {}
+
+    try:
+        # Information
+        metadata['Filename'] = file_path.name
+        metadata['Path'] = str(file_path.absolute())
+
+        # Size in bytes
+        stat_info = file_path.stat()
+        metadata['Size'] = f"{stat_info.st_size} bytes"
+
+        # Modification date
+        mod_time = datetime.fromtimestamp(stat_info.st_mtime)
+        metadata['Modified'] = mod_time.strftime('%Y-%m-%d %H:%M:%S')
+
+        # Format
+        if image.format:
+            metadata['Format'] = image.format
+        else:
+            metadata['Format'] = "Unknown"
+
+        # Dimensions
+        width, height = image.size
+        metadata['Dimensions'] = f"{width}x{height} pixels"
+
+    except Exception as e:
+        print(f"Error reading basic metadata for {file_path.name}: {e}",
+              file=sys.stderr)
+
+    return metadata
 
 
 def main():
@@ -153,6 +203,31 @@ def main():
         return 1
 
     print(f"Successfully open {len(opened_images)} images")
+
+    # Extract and display basic metadata
+    for file_path, image in opened_images:
+        print(f"\n{'='*60}")
+        print(f"File: {file_path.name}")
+        print(f"{'='*60}")
+
+        basic_metadata = extract_basic_metadata(image, file_path)
+        print("\n[Basic Metadata]")
+        for key, value in basic_metadata.items():
+            print(f"  {key}: {value}")
+
+        # Extract and display EXIF
+        exif_data = extract_exif(image, file_path)
+        if exif_data:
+            print("\n[EXIF Data]")
+            for key, value in exif_data.items():
+                if isinstance(value, dict):
+                    print(f"  {key}:")
+                    for sub_key, sub_value in value.items():
+                        print(f"    {sub_key}: {sub_value}")
+        else:
+            print("\n[EXIF Data]")
+            print("  No EXIF data found")
+
     return 0
 
 
