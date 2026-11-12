@@ -5,7 +5,8 @@
 
 import sys  # Used for exiting the program with a status code
 import argparse  # Used for parsing command-line arguments
-from pathlib import Path  # Used for handling filesystem paths in an object-oriented way
+from pathlib import Path  # Used for handling filesystem paths
+from PIL import Image  # Used for opening and inspecting image files
 
 
 def parse_arguments():
@@ -69,14 +70,35 @@ def validate_file_extension(file_path):
 
     supported_extensions = {'.jpg', '.jpeg', '.png', '.gif', '.bmp'}
 
-    file_extension = file_path.suffix.lower()
+    ext = file_path.suffix.lower()
 
-    if file_extension not in supported_extensions:
-        print(f"Error: Unsupported file format: {file_path.name} ({file_extension})",
-            file=sys.stderr)
+    if ext not in supported_extensions:
+        print(f"Error: Unsupported format: {file_path.name} ({ext})",
+              file=sys.stderr)
         return False
 
     return True
+
+
+def open_image_safely(file_path):
+    """Try to open image safe, return PIL Image object if ok"""
+
+    try:
+        image = Image.open(file_path)
+        # Verify the img is valid access its format
+        image.verify()
+        # Re-open, as verify marks as unusable
+        image = Image.open(file_path)
+        return image
+
+    except IOError as e:
+        print(f"Error: Cannot read image {file_path.name}: {e}",
+              file=sys.stderr)
+        return None
+    except Exception as e:
+        print(f"Error: Corrupted or invalid image {file_path.name}: {e}",
+              file=sys.stderr)
+        return None
 
 
 def main():
@@ -95,6 +117,19 @@ def main():
         print("Error: No valid files", file=sys.stderr)
         return 1
 
+    # Test images opening
+    opened_images = []
+    for file_path in valid_files:
+        image = open_image_safely(file_path)
+        if image:
+            opened_images.append((file_path, image))
+        # None print error already
+
+    if not opened_images:
+        print("Error: No valid images to be open", file=sys.stderr)
+        return 1
+
+    print(f"Successfully open {len(opened_images)} images")
     return 0
 
 
