@@ -3,18 +3,18 @@
 
 """Scorpion - Read image files and extract metadata"""
 
-import sys  # Used for exiting the program with a status code
-import argparse  # Used for parsing command-line arguments
-from pathlib import Path  # Used for handling filesystem paths
-from PIL import Image, ExifTags  # Used for opening and inspecting image files
-from datetime import datetime  # Used for dates
+import sys  # Exit o programa com o stat code
+import argparse  # Para parsing os argumentos
+from pathlib import Path  # Para lidar com os Path
+from PIL import Image, ExifTags  # Abrir e verificar os Img Files
+from datetime import datetime  # Para mudar/usar datas
 
 
 def parse_arguments():
     """Process command-line arguments."""
     parser = argparse.ArgumentParser()
 
-    # One or more positional image files
+    # Um ou mais image files
     parser.add_argument(
         'files',
         nargs='+',
@@ -32,21 +32,19 @@ def validate_input_files(file_paths):
     for file_path_str in file_paths:
         file_path = Path(file_path_str)
 
-        # Check existence
+        # Verifica se existe
         if not file_path.exists():
             print(f"Error: File not found: {file_path_str}", file=sys.stderr)
             continue
 
-        # Check "is_file" and not directory
+        # Ve se é file e nao folder
         if not file_path.is_file():
             print(f"Error: Not a file: {file_path_str}", file=sys.stderr)
             continue
 
-        # Try to see if is readable (permission)
+        # Tenta acessar metadados (permissao)
         try:
-            if not file_path.stat():
-                print(f"Error: Cannot read file: {file_path_str}",
-                      file=sys.stderr)
+            file_path.stat()
         except PermissionError:
             print(f"Error: Permission denied: {file_path_str}",
                   file=sys.stderr)
@@ -56,11 +54,11 @@ def validate_input_files(file_paths):
                   file=sys.stderr)
             continue
 
-        # Validate extension
+        # Verifica se extensao é suportada
         if not validate_file_extension(file_path):
             continue
 
-        # Valid file
+        # Adiciona la lista
         valid_files.append(file_path)
 
     return valid_files
@@ -85,11 +83,10 @@ def open_image_safely(file_path):
     """Try to open image safe, return PIL Image object if ok"""
 
     try:
-        image = Image.open(file_path)
-        # Verify the img is valid access its format
-        image.verify()
-        # Re-open, as verify marks as unusable
-        image = Image.open(file_path)
+        image = Image.open(file_path)  # Lazy open (sem read)
+        image.verify()  # Verifica dentro
+        image.close()
+        image = Image.open(file_path)  # Abre novamente,.verify unsafe
         return image
 
     except IOError as e:
@@ -113,14 +110,14 @@ def extract_exif(image, file_path):
         if not exif:
             return exif_data
 
-        # Convert EXIF tag IDs to readable names
+        # Transforma TAGS_id em nomes e não códigos
         for tag_id, value in exif.items():
             tag_name = ExifTags.TAGS.get(tag_id, tag_id)
 
-            # Handle GPS Info sub-IFD (nested tags)
+            # Para GPS_info sub-IFD (nested tags)
             if tag_id == 34853:  # GPSInfo tag ID
                 try:
-                    gps_ifd = exif.get_ifd(0x8825)  # Get the nested GPS data
+                    gps_ifd = exif.get_ifd(0x8825)  # Pega os nested GPS data
                     gps_data = {}
                     for gps_tag_id, gps_value in gps_ifd.items():
                         gps_tag_name = ExifTags.GPSTAGS.get(gps_tag_id,
@@ -145,25 +142,25 @@ def extract_basic_metadata(image, file_path):
     metadata = {}
 
     try:
-        # Information
+        # Info
         metadata['Filename'] = file_path.name
         metadata['Path'] = str(file_path.absolute())
 
-        # Size in bytes
+        # Tamanho (bytes)
         stat_info = file_path.stat()
         metadata['Size'] = f"{stat_info.st_size} bytes"
 
-        # Modification date
+        # Data modificação (creation on Linux not ok - on EXIF)
         mod_time = datetime.fromtimestamp(stat_info.st_mtime)
         metadata['Modified'] = mod_time.strftime('%Y-%m-%d %H:%M:%S')
 
-        # Format
+        # Formato
         if image.format:
             metadata['Format'] = image.format
         else:
             metadata['Format'] = "Unknown"
 
-        # Dimensions
+        # Dimensão
         width, height = image.size
         metadata['Dimensions'] = f"{width}x{height} pixels"
 
@@ -177,34 +174,36 @@ def extract_basic_metadata(image, file_path):
 def main():
     args = parse_arguments()
 
-    # Parse arguments
-    print(f"Files: {args.files}")
-    print(f"Total: {len(args.files)}")
+    total_files = len(args.files)
 
-    # Validate files
-    # Validate extensions
+    # Valida arquivos
     valid_files = validate_input_files(args.files)
-    print(f"Valid files: {len(valid_files)}")
+    invalid_files = total_files - len(valid_files)
 
     if not valid_files:
         print("Error: No valid files", file=sys.stderr)
         return 1
 
-    # Test images opening
+    # Testa abertura
     opened_images = []
+    open_errors = 0
+
     for file_path in valid_files:
         image = open_image_safely(file_path)
         if image:
             opened_images.append((file_path, image))
-        # None print error already
+        else:
+            open_errors += 1
 
     if not opened_images:
         print("Error: No valid images to be open", file=sys.stderr)
         return 1
 
-    print(f"Successfully open {len(opened_images)} images")
+    # Resumo
+    processed = 0
+    no_exif = 0
 
-    # Extract and display basic metadata
+    # Extrai e mostra basic metadata
     for file_path, image in opened_images:
         print(f"\n{'='*60}")
         print(f"File: {file_path.name}")
@@ -215,7 +214,7 @@ def main():
         for key, value in basic_metadata.items():
             print(f"  {key}: {value}")
 
-        # Extract and display EXIF
+        # Extrai e mostra EXIF
         exif_data = extract_exif(image, file_path)
         if exif_data:
             print("\n[EXIF Data]")
@@ -224,11 +223,27 @@ def main():
                     print(f"  {key}:")
                     for sub_key, sub_value in value.items():
                         print(f"    {sub_key}: {sub_value}")
+                else:
+                    print(f"  {key}: {value}")
         else:
             print("\n[EXIF Data]")
             print("  No EXIF data found")
+            no_exif += 1
 
-    return 0
+        processed += 1
+        image.close()
+
+    # Resumo Final
+    errors = invalid_files + open_errors
+    print(f"\n{'-' * 60}")
+    print("[Summary]")
+    print(f"  Input files: {total_files}")
+    print(f"  Processed: {processed}")
+    print(f"  Errors: {errors}")
+    print(f"  Without EXIF: {no_exif}")
+    print(f"{'-' * 60}")
+
+    return 1 if errors > 0 else 0
 
 
 if __name__ == '__main__':

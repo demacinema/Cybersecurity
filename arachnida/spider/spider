@@ -394,22 +394,23 @@ def main():
 
     # Garante que o path exista (se não tiver, cria):
     if not ensure_output_dir(args.path):
-        sys.exit(1)
+        return 1
 
     # Se não for recursivo, processa apenas a página única
     if not args.rec:
         downloaded = process_single_page(args.url, args.path)
         print(f"\nBaixadas: {downloaded}")
-        return
+        return 0
 
     # default da recursão sem -l = 5
     max_depth = args.level if args.level is not None else 5
     downloaded = process_recursive(args.url, args.path, max_depth)
     print(f"Baixadas: {downloaded}\n")
+    return 0
 
 
 if __name__ == '__main__':
-    main()
+    sys.exit(main())
 
     # # Testa baixar a página
     # html = fetch_page(args.url)
